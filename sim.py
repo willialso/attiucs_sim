@@ -172,11 +172,10 @@ class Simulation:
 
 def calculate_session_metrics(df_trades):
     """Calculate session-level metrics for Tab 1"""
-    metrics = {}
+    session_metrics = []
     
     for sim_id in df_trades['sim_id'].unique():
         df_sim = df_trades[df_trades['sim_id'] == sim_id].copy()
-        sim_metrics = {}
         
         for trader_type in ['A', 'B', 'C', 'D']:
             df_type = df_sim[df_sim['trader_type'] == trader_type].copy()
@@ -210,28 +209,27 @@ def calculate_session_metrics(df_trades):
             # Total revenue
             total_revenue = df_type['revenue'].sum()
             
-            sim_metrics[trader_type] = {
-                'Total Traders': total_traders,
-                'Total Sessions': total_sessions,
-                'Avg Trades per Session': avg_trades_per_session,
-                'Avg Seconds Between Trades': avg_seconds_between_trades,
-                'First Trade Up %': first_trade_up_pct,
-                'Subsequent Direction Match %': direction_match_pct,
-                'Avg Trade Amount': avg_trade_amount,
-                'Total Revenue': total_revenue
-            }
-        
-        metrics[sim_id] = sim_metrics
+            session_metrics.append({
+                'sim_id': sim_id,
+                'trader_type': trader_type,
+                'total_traders': total_traders,
+                'total_sessions': total_sessions,
+                'avg_trades_per_session': avg_trades_per_session,
+                'avg_seconds_between_trades': avg_seconds_between_trades,
+                'first_trade_up_pct': first_trade_up_pct,
+                'subsequent_direction_match_pct': direction_match_pct,
+                'avg_trade_amount': avg_trade_amount,
+                'total_revenue': total_revenue
+            })
     
-    return metrics
+    return pd.DataFrame(session_metrics)
 
 def calculate_trader_metrics(df_trades):
     """Calculate trader-level metrics for Tab 2"""
-    metrics = {}
+    trader_metrics = []
     
     for sim_id in df_trades['sim_id'].unique():
         df_sim = df_trades[df_trades['sim_id'] == sim_id].copy()
-        sim_metrics = {}
         
         for trader_type in ['A', 'B', 'C', 'D']:
             df_type = df_sim[df_sim['trader_type'] == trader_type].copy()
@@ -250,119 +248,45 @@ def calculate_trader_metrics(df_trades):
             # Total revenue
             total_revenue = df_type['revenue'].sum()
             
-            sim_metrics[trader_type] = {
-                'Total Traders': total_traders,
-                'Total Trades': total_trades,
-                'Winning %': winning_pct,
-                'Avg Trade Amount': avg_trade_amount,
-                'Total Revenue': total_revenue
-            }
-        
-        metrics[sim_id] = sim_metrics
+            trader_metrics.append({
+                'sim_id': sim_id,
+                'trader_type': trader_type,
+                'total_traders': total_traders,
+                'total_trades': total_trades,
+                'winning_pct': winning_pct,
+                'avg_trade_amount': avg_trade_amount,
+                'total_revenue': total_revenue
+            })
     
-    return metrics
+    return pd.DataFrame(trader_metrics)
 
 def calculate_revenue_summary(df_trades):
     """Calculate revenue summary for Tab 3"""
-    metrics = {}
+    revenue_metrics = []
     
     for sim_id in df_trades['sim_id'].unique():
         df_sim = df_trades[df_trades['sim_id'] == sim_id].copy()
-        sim_metrics = {}
         
         # Calculate revenue for each trader type
         for trader_type in ['A', 'B', 'C', 'D']:
             df_type = df_sim[df_sim['trader_type'] == trader_type].copy()
             total_revenue = df_type['revenue'].sum()
             
-            sim_metrics[trader_type] = {
-                'Total Revenue': total_revenue
-            }
+            revenue_metrics.append({
+                'sim_id': sim_id,
+                'trader_type': trader_type,
+                'total_revenue': total_revenue
+            })
         
         # Calculate Atticus revenue (sum of all trader revenues)
         atticus_revenue = df_sim['revenue'].sum()
-        sim_metrics['Atticus'] = {
-            'Total Revenue': atticus_revenue
-        }
-        
-        metrics[sim_id] = sim_metrics
+        revenue_metrics.append({
+            'sim_id': sim_id,
+            'trader_type': 'Atticus',
+            'total_revenue': atticus_revenue
+        })
     
-    return metrics
-
-def create_formatted_dataframe(metrics, metric_names):
-    """Create a formatted DataFrame with trader types as column headers"""
-    # Create multi-level columns
-    columns = pd.MultiIndex.from_product([['Type A', 'Type B', 'Type C', 'Type D'], metric_names])
-    
-    # Create empty DataFrame with multi-level columns
-    df = pd.DataFrame(index=range(len(metrics)), columns=columns)
-    
-    # Fill in the data
-    for sim_id, sim_metrics in metrics.items():
-        for trader_type, type_metrics in sim_metrics.items():
-            col_prefix = f'Type {trader_type}'
-            for metric_name in metric_names:
-                if metric_name in type_metrics:
-                    df.loc[sim_id-1, (col_prefix, metric_name)] = type_metrics[metric_name]
-    
-    return df
-
-def save_to_excel(df_trades, output_file='Rev_Sim_Output_Tables.xlsx'):
-    """Save simulation results to Excel with three specific tabs"""
-    try:
-        # Calculate metrics for each tab
-        session_metrics = calculate_session_metrics(df_trades)
-        trader_metrics = calculate_trader_metrics(df_trades)
-        revenue_metrics = calculate_revenue_summary(df_trades)
-        
-        # Define metric names for each tab
-        session_metric_names = [
-            'Total Traders', 'Total Sessions', 'Avg Trades per Session',
-            'Avg Seconds Between Trades', 'First Trade Up %',
-            'Subsequent Direction Match %', 'Avg Trade Amount', 'Total Revenue'
-        ]
-        
-        trader_metric_names = [
-            'Total Traders', 'Total Trades', 'Winning %',
-            'Avg Trade Amount', 'Total Revenue'
-        ]
-        
-        revenue_metric_names = ['Total Revenue']
-        
-        # Create formatted DataFrames
-        session_df = create_formatted_dataframe(session_metrics, session_metric_names)
-        trader_df = create_formatted_dataframe(trader_metrics, trader_metric_names)
-        
-        # Special handling for revenue summary (includes Atticus)
-        revenue_columns = pd.MultiIndex.from_product([
-            ['Type A', 'Type B', 'Type C', 'Type D', 'Atticus'],
-            revenue_metric_names
-        ])
-        revenue_df = pd.DataFrame(index=range(len(revenue_metrics)), columns=revenue_columns)
-        
-        for sim_id, sim_metrics in revenue_metrics.items():
-            for trader_type, type_metrics in sim_metrics.items():
-                col_prefix = f'Type {trader_type}' if trader_type != 'Atticus' else 'Atticus'
-                for metric_name in revenue_metric_names:
-                    if metric_name in type_metrics:
-                        revenue_df.loc[sim_id-1, (col_prefix, metric_name)] = type_metrics[metric_name]
-        
-        # Create Excel writer
-        with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-            # Tab 1: Session Metrics
-            session_df.to_excel(writer, sheet_name="Session Metrics")
-            
-            # Tab 2: Trader Metrics
-            trader_df.to_excel(writer, sheet_name="Trader Metrics")
-            
-            # Tab 3: Revenue Summary
-            revenue_df.to_excel(writer, sheet_name="Revenue Summary")
-        
-        logging.info(f"Results saved to {output_file}")
-        return True
-    except Exception as e:
-        logging.error(f"Error saving to Excel: {str(e)}")
-        return False
+    return pd.DataFrame(revenue_metrics)
 
 def run_multiple_simulations(num_sims=10):
     """Run multiple simulations and collect results"""
@@ -380,6 +304,31 @@ def run_multiple_simulations(num_sims=10):
     combined_trades = pd.concat(all_trades, ignore_index=True)
     
     return combined_trades
+
+def save_to_excel(df_trades, output_file='Rev_Sim_Output_Tables.xlsx'):
+    """Save simulation results to Excel with three specific tabs"""
+    try:
+        # Calculate metrics for each tab
+        session_metrics = calculate_session_metrics(df_trades)
+        trader_metrics = calculate_trader_metrics(df_trades)
+        revenue_summary = calculate_revenue_summary(df_trades)
+        
+        # Create Excel writer
+        with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
+            # Tab 1: Session Metrics
+            session_metrics.to_excel(writer, sheet_name="Session Metrics", index=False)
+            
+            # Tab 2: Trader Metrics
+            trader_metrics.to_excel(writer, sheet_name="Trader Metrics", index=False)
+            
+            # Tab 3: Revenue Summary
+            revenue_summary.to_excel(writer, sheet_name="Revenue Summary", index=False)
+        
+        logging.info(f"Results saved to {output_file}")
+        return True
+    except Exception as e:
+        logging.error(f"Error saving to Excel: {str(e)}")
+        return False
 
 def main():
     logging.info("Starting simulation batch")
