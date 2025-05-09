@@ -162,85 +162,135 @@ class Simulation:
         """Generate summary DataFrames"""
         df_trades = pd.DataFrame(self.trades)
         
-        # Trader Summary
-        df_valid = df_trades[df_trades["trade_result"].isin(["Win Up", "Win Down", "Loss"])]
-        df_trader_summary = df_valid.groupby("trader_id").agg(
-            trader_type=("trader_type", "first"),
-            total_sessions=("session_key", "nunique"),
-            trades=("trade_id", "count"),
-            total_wins=("trade_result", lambda x: x.str.startswith("Win").sum()),
-            total_losses=("trade_result", lambda x: (x == "Loss").sum()),
-            win_rate_percent=("trade_result", lambda x: round(x.str.startswith("Win").mean() * 100, 2)),
-            up_count=("predicted_direction", lambda x: (x == "Up").sum()),
-            down_count=("predicted_direction", lambda x: (x == "Down").sum()),
-            trade_amount=("trade_amount", "mean")
-        ).reset_index()
-        df_trader_summary['sim_id'] = self.sim_id
-
-        # Session Summary
-        session_summaries = []
-        for session_key, group in df_trades.groupby("session_key"):
-            group = group.sort_values("trade_id").reset_index(drop=True)
-            if group.empty:
-                continue
-
-            first_bet_up = group.loc[0, "predicted_direction"] == "Up"
-            trader_id = group.loc[0, "trader_id"]
-            trader_type = group.loc[0, "trader_type"]
-            date = group.loc[0, "date"]
-            total_trades = len(group)
-            tag = f"{trader_id}_{date}_Session{group.loc[0, 'session_id']}"
-
-            up_after_up = down_after_up = up_after_down = down_after_down = skipped = 0
-            for i in range(1, total_trades):
-                prev_actual = group.loc[i - 1, "actual_direction"]
-                curr_pred = group.loc[i, "predicted_direction"]
-
-                if prev_actual not in ["Up", "Down"]:
-                    skipped += 1
-                    continue
-
-                if prev_actual == "Up":
-                    if curr_pred == "Up":
-                        up_after_up += 1
-                    else:
-                        down_after_up += 1
-                elif prev_actual == "Down":
-                    if curr_pred == "Up":
-                        up_after_down += 1
-                    else:
-                        down_after_down += 1
-
-            session_summaries.append({
-                "date": date,
-                "session_key": session_key,
-                "trader_id": trader_id,
-                "trader_type": trader_type,
-                "trades": total_trades,
-                "first_bet_up": first_bet_up,
-                "session_tag": tag,
-                "non_first_down_given_last_win_up": down_after_up,
-                "non_first_up_given_last_win_down": up_after_down,
-                "non_first_down_given_last_win_down": down_after_down,
-                "non_first_nc": skipped,
-                "sim_id": self.sim_id
-            })
-
-        session_summary_df = pd.DataFrame(session_summaries)
+        # Convert timestamps to datetime for time calculations
+        df_trades['timestamp_trade_placed'] = pd.to_datetime(df_trades['timestamp_trade_placed'])
+        df_trades['strike_time'] = pd.to_datetime(df_trades['strike_time'])
         
         return {
-            'trades': df_trades,
-            'trader_summary': df_trader_summary,
-            'session_summary': session_summary_df
+            'trades': df_trades
         }
+
+def calculate_session_metrics(df_trades):
+    """Calculate session-level metrics for Tab 1"""
+    session_metrics = []
+    
+    for sim_id in df_trades['sim_id'].unique():
+        df_sim = df_trades[df_trades['sim_id'] == sim_id]
+        
+        for trader_type in ['A', 'B', 'C', 'D']:
+            df_type = df_sim[df_sim['trader_type'] == trader_type]
+            
+            # Calculate metrics
+            total_traders = df_type['trader_id'].nunique()
+            total_sessions = df_type['session_key'].nunique()
+            
+            # Avg trades per session
+            trades_per_session = df_type.groupby('session_key').size()
+            avg_trades_per_session = trades_per_session.mean()
+            
+            # Time between trades
+            df_type = df_type.sort_values(['session_key', 'trade_id'])
+            df_type['next_trade_time'] = df_type.groupby('session_key')['timestamp_trade_placed'].shift(-1)
+            df_type['time_between_trades'] = (df_type['next_trade_time'] - df_type['strike_time']).dt.total_seconds()
+            avg_seconds_between_trades = df_type['time_between_trades'].mean()
+            
+            # First trade up percentage
+            first_trades = df_type[df_type['trade_id'] == 1]
+            first_trade_up_pct = (first_trades['predicted_direction'] == 'Up').mean() * 100
+            
+            # Subsequent trade direction matching
+            subsequent_trades = df_type[df_type['trade_id'] > 1]
+            subsequent_trades['prev_direction'] = subsequent_trades.groupby('session_key')['predicted_direction'].shift(1)
+            direction_match_pct = (subsequent_trades['predicted_direction'] == subsequent_trades['prev_direction']).mean() * 100
+            
+            # Average trade amount
+            avg_trade_amount = df_type['trade_amount'].mean()
+            
+            # Total revenue
+            total_revenue = df_type['revenue'].sum()
+            
+            session_metrics.append({
+                'sim_id': sim_id,
+                'trader_type': trader_type,
+                'total_traders': total_traders,
+                'total_sessions': total_sessions,
+                'avg_trades_per_session': avg_trades_per_session,
+                'avg_seconds_between_trades': avg_seconds_between_trades,
+                'first_trade_up_pct': first_trade_up_pct,
+                'subsequent_direction_match_pct': direction_match_pct,
+                'avg_trade_amount': avg_trade_amount,
+                'total_revenue': total_revenue
+            })
+    
+    return pd.DataFrame(session_metrics)
+
+def calculate_trader_metrics(df_trades):
+    """Calculate trader-level metrics for Tab 2"""
+    trader_metrics = []
+    
+    for sim_id in df_trades['sim_id'].unique():
+        df_sim = df_trades[df_trades['sim_id'] == sim_id]
+        
+        for trader_type in ['A', 'B', 'C', 'D']:
+            df_type = df_sim[df_sim['trader_type'] == trader_type]
+            
+            # Calculate metrics
+            total_traders = df_type['trader_id'].nunique()
+            total_trades = len(df_type)
+            
+            # Winning percentage
+            winning_trades = df_type[df_type['trade_result'].str.startswith('Win')]
+            winning_pct = (len(winning_trades) / total_trades) * 100 if total_trades > 0 else 0
+            
+            # Average trade amount
+            avg_trade_amount = df_type['trade_amount'].mean()
+            
+            # Total revenue
+            total_revenue = df_type['revenue'].sum()
+            
+            trader_metrics.append({
+                'sim_id': sim_id,
+                'trader_type': trader_type,
+                'total_traders': total_traders,
+                'total_trades': total_trades,
+                'winning_pct': winning_pct,
+                'avg_trade_amount': avg_trade_amount,
+                'total_revenue': total_revenue
+            })
+    
+    return pd.DataFrame(trader_metrics)
+
+def calculate_revenue_summary(df_trades):
+    """Calculate revenue summary for Tab 3"""
+    revenue_metrics = []
+    
+    for sim_id in df_trades['sim_id'].unique():
+        df_sim = df_trades[df_trades['sim_id'] == sim_id]
+        
+        # Calculate revenue for each trader type
+        for trader_type in ['A', 'B', 'C', 'D']:
+            df_type = df_sim[df_sim['trader_type'] == trader_type]
+            total_revenue = df_type['revenue'].sum()
+            
+            revenue_metrics.append({
+                'sim_id': sim_id,
+                'trader_type': trader_type,
+                'total_revenue': total_revenue
+            })
+        
+        # Calculate Atticus revenue (sum of all trader revenues)
+        atticus_revenue = df_sim['revenue'].sum()
+        revenue_metrics.append({
+            'sim_id': sim_id,
+            'trader_type': 'Atticus',
+            'total_revenue': atticus_revenue
+        })
+    
+    return pd.DataFrame(revenue_metrics)
 
 def run_multiple_simulations(num_sims=10):
     """Run multiple simulations and collect results"""
-    all_results = {
-        'trades': [],
-        'trader_summary': [],
-        'session_summary': []
-    }
+    all_trades = []
     
     for sim_id in range(1, num_sims + 1):
         logging.info(f"Running simulation {sim_id}")
@@ -248,34 +298,31 @@ def run_multiple_simulations(num_sims=10):
         results = sim.run_simulation()
         
         if results:
-            for key in all_results:
-                all_results[key].append(results[key])
+            all_trades.append(results['trades'])
     
     # Combine results from all simulations
-    combined_results = {
-        key: pd.concat(dfs, ignore_index=True) 
-        for key, dfs in all_results.items()
-    }
+    combined_trades = pd.concat(all_trades, ignore_index=True)
     
-    return combined_results
+    return combined_trades
 
-def save_to_excel(results, output_file='Rev_Sim_Output_Tables.xlsx'):
-    """Save simulation results to Excel with multiple sheets"""
+def save_to_excel(df_trades, output_file='Rev_Sim_Output_Tables.xlsx'):
+    """Save simulation results to Excel with three specific tabs"""
     try:
+        # Calculate metrics for each tab
+        session_metrics = calculate_session_metrics(df_trades)
+        trader_metrics = calculate_trader_metrics(df_trades)
+        revenue_summary = calculate_revenue_summary(df_trades)
+        
+        # Create Excel writer
         with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
-            # Save each DataFrame to its own sheet
-            results['trades'].to_excel(writer, sheet_name="Full Trade Log", index=False)
-            results['trader_summary'].to_excel(writer, sheet_name="Trader Summary", index=False)
-            results['session_summary'].to_excel(writer, sheet_name="Session Summary", index=False)
+            # Tab 1: Session Metrics
+            session_metrics.to_excel(writer, sheet_name="Session Metrics", index=False)
             
-            # Create pivot tables for analysis across simulations
-            pivot_trades = pd.pivot_table(
-                results['trades'],
-                values=['trade_amount', 'revenue'],
-                index=['sim_id', 'trader_type'],
-                aggfunc={'trade_amount': 'mean', 'revenue': ['sum', 'mean']}
-            ).reset_index()
-            pivot_trades.to_excel(writer, sheet_name="Simulation Analysis", index=False)
+            # Tab 2: Trader Metrics
+            trader_metrics.to_excel(writer, sheet_name="Trader Metrics", index=False)
+            
+            # Tab 3: Revenue Summary
+            revenue_summary.to_excel(writer, sheet_name="Revenue Summary", index=False)
         
         logging.info(f"Results saved to {output_file}")
         return True
@@ -287,11 +334,11 @@ def main():
     logging.info("Starting simulation batch")
     
     # Run simulations
-    results = run_multiple_simulations(num_sims=10)
+    df_trades = run_multiple_simulations(num_sims=10)
     
     # Save results
-    if results:
-        save_to_excel(results)
+    if df_trades is not None:
+        save_to_excel(df_trades)
     else:
         logging.error("No results to save")
     
